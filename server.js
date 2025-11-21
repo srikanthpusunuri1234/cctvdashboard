@@ -16,17 +16,18 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ==================================================================
 
 // 1. ENTER YOUR VPS PUBLIC IP HERE
-//    This is the IP address of the remote server where MediaMTX is running.
 const VPS_IP = '13.235.XX.XX'; 
 
-// 2. API URL (Port 9997)
-//    This is where we ask "What cameras are online?"
-//    NOTE: Ensure port 9997 is OPEN in your VPS firewall (sudo ufw allow 9997/tcp)
+// 2. MEDIA MTX CREDENTIALS (Required for 401 Fix)
+//    Check your mediamtx.yml file for these.
+//    If you haven't set them, try 'admin' and your password, or check the 'authInternalUsers' section.
+const API_USER = '';  // Leave empty if no user
+const API_PASS = '';  // Leave empty if no pass
+
+// 3. API URL (Port 9997)
 const MEDIAMTX_API_URL = `http://${VPS_IP}:9997/v3/paths/list`;
 
-// 3. HLS Playback Base URL (Port 8888)
-//    This is the URL base that the video player will use to pull the stream.
-//    NOTE: Ensure port 8888 is OPEN in your VPS firewall.
+// 4. HLS Playback Base URL (Port 8888)
 const HLS_PUBLIC_BASE = `http://${VPS_IP}:8888`;
 
 // ==================================================================
@@ -36,8 +37,17 @@ app.get('/api/cameras', async (req, res) => {
     try {
         console.log(`🔍 Fetching camera list from: ${MEDIAMTX_API_URL}`);
         
-        // Fetch list of paths from MediaMTX API with a 3-second timeout
-        const response = await axios.get(MEDIAMTX_API_URL, { timeout: 3000 });
+        // Prepare Auth Config
+        let axiosConfig = { timeout: 3000 };
+        if (API_USER && API_PASS) {
+            axiosConfig.auth = {
+                username: API_USER,
+                password: API_PASS
+            };
+        }
+
+        // Fetch list of paths from MediaMTX API with Auth
+        const response = await axios.get(MEDIAMTX_API_URL, axiosConfig);
         const items = response.data.items || [];
 
         // Filter and format the list
@@ -46,8 +56,7 @@ app.get('/api/cameras', async (req, res) => {
             .map(item => ({
                 name: item.name, // e.g., "live/testcar"
                 
-                // Construct the full HLS URL for VLC or Web Player
-                // Example: http://13.235.XX.XX:8888/live/testcar/index.m3u8
+                // Construct the full HLS URL
                 url: `${HLS_PUBLIC_BASE}/${item.name}/index.m3u8`
             }));
 
@@ -58,11 +67,13 @@ app.get('/api/cameras', async (req, res) => {
         // Error Handling
         console.error("❌ Connection Error:", error.message);
         
-        if (error.code === 'ECONNREFUSED') {
-            console.error("   -> CRITICAL: Cannot connect to Port 9997 on the remote server.");
-            console.error("   -> CHECK 1: Is MediaMTX running on the VPS?");
-            console.error("   -> CHECK 2: Is Port 9997 open in your VPS Firewall (ufw/AWS Security Group)?");
-            console.error("   -> CHECK 3: Did you set 'api: yes' in mediamtx.yml?");
+        if (error.response && error.response.status === 401) {
+            console.error("   -> CRITICAL: 401 Unauthorized.");
+            console.error("   -> ACTION: You must set API_USER and API_PASS in server.js.");
+            console.error("   -> HINT: Check 'mediamtx.yml' for 'authInternalUsers'.");
+        } else if (error.code === 'ECONNREFUSED') {
+            console.error("   -> CRITICAL: Cannot connect to Port 9997.");
+            console.error("   -> CHECK: Is Port 9997 open in your VPS Firewall?");
         }
         
         res.json({ 
